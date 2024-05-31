@@ -120,6 +120,56 @@ app.get('/photos', async (req, res) => {
     }
 });
 
+app.post('/buy', async (req, res) => {
+    const { image_url, buyer_wallet } = req.body;
+
+    try {
+        const account = await server.loadAccount(sourceKeys.publicKey());
+        const urlKey = Object.keys(account.data_attr).find(key => Buffer.from(account.data_attr[key], 'base64').toString('utf-8') === image_url);
+        const walletAddressKey = urlKey.replace('url_', 'wallet_');
+        const seller_wallet = Buffer.from(account.data_attr[walletAddressKey], 'base64').toString('utf-8');
+
+        if (buyer_wallet === seller_wallet) {
+            return res.status(400).json({ message: 'Cannot buy your own image' });
+        }
+
+        const buyerKeys = Keypair.fromSecret(buyer_wallet);
+
+        const buyerAccount = await server.loadAccount(buyerKeys.publicKey());
+        const transaction = new TransactionBuilder(buyerAccount, {
+            fee: '100',
+            networkPassphrase: Networks.TESTNET
+        })
+        .addOperation(Operation.payment({
+            destination: seller_wallet,
+            asset: Asset.native(),
+            amount: '10' // Example amount
+        }))
+        .setTimeout(30)
+        .build();
+
+        transaction.sign(buyerKeys);
+        const result = await server.submitTransaction(transaction);
+
+        // Remove the image from the listing
+        const transactionRemove = new TransactionBuilder(account, {
+            fee: '100',
+            networkPassphrase: Networks.TESTNET
+        })
+        .addOperation(Operation.manageData({ name: urlKey, value: null }))
+        .addOperation(Operation.manageData({ name: walletAddressKey, value: null }))
+        .setTimeout(30)
+        .build();
+
+        transactionRemove.sign(sourceKeys);
+        await server.submitTransaction(transactionRemove);
+
+        res.status(200).json({ message: 'Purchase successful', result });
+    } catch (error) {
+        res.status(500).json({ message: 'Purchase failed', error: error.toString() });
+    }
+});
+
 app.listen(3000, () => {
     console.log('Server running on port 3000');
 });
